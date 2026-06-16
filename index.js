@@ -276,10 +276,21 @@ async function serveTheme(path) {
     cf: { cacheTtl: OPT.themeCacheTtl }
   });
   if (!resp.ok) return new Response("theme not found: " + path, { status: 502 });
+
+  // raw.githubusercontent.com 默认返回 text/plain，浏览器会把 HTML 当源码显示
+  // 必须按扩展名强制 Content-Type
+  let ct;
+  if (path.endsWith(".html")) ct = "text/html; charset=utf-8";
+  else if (path.endsWith(".css")) ct = "text/css; charset=utf-8";
+  else if (path.endsWith(".js"))  ct = "application/javascript; charset=utf-8";
+  else if (path.endsWith(".json")) ct = "application/json; charset=utf-8";
+  else if (path.endsWith(".svg")) ct = "image/svg+xml";
+  else ct = resp.headers.get("Content-Type") || "text/html; charset=utf-8";
+
   return new Response(resp.body, {
     status: resp.status,
     headers: {
-      "Content-Type": resp.headers.get("Content-Type") || "text/html; charset=utf-8",
+      "Content-Type": ct,
       "Cache-Control": `public, max-age=${OPT.themeCacheTtl}`
     }
   });
