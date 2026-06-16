@@ -1,49 +1,45 @@
-# 匿名聊天室 · Cloudflare Workers + TiDB（单文件版）
+# flarechat · Cloudflare Workers + TiDB（单文件版）
 
-零依赖、零构建。一个 `index.js` 跑起完整聊天室（含多房间、WebSocket 实时、图片发送）。
+零依赖、零构建、**纯 Dashboard 粘贴部署**（无需 wrangler）。
 
-## 架构
+## 架构（轮询版，无 Durable Objects）
 
 - **入口**：Cloudflare Workers（module 格式，单 `index.js`）
-- **实时**：Durable Objects（hibernation WebSocket，零额外成本）
 - **存储**：TiDB Cloud Serverless（HTTP Data API，沿用 c.js 风格）
+- **实时**：HTTP 轮询（每 2 秒拉新消息），不依赖 WebSocket / DO
 - **前端**：远程 HTML（GitHub Raw），`OPT.themeURL` 拉取
-- **限流/房间清单**：Workers KV
+- **限流/房间清单/在线人数**：Workers KV（一个 namespace 复用）
 
-## 部署清单
+> 为什么不用 WebSocket？Dashboard 在线编辑器无法注册 Durable Object class，
+> 而 WebSocket 实时广播必须依赖 DO。本方案放弃 WS 改用轮询，换取纯 Dashboard 部署能力。
+
+## 部署步骤
 
 ### 1. TiDB 建表
-在 TiDB Cloud 控制台的 SQL Editor 执行 `schema.sql`。
+TiDB Cloud 控制台 → SQL Editor，**逐条**执行 `schema.sql` 里的每条 SQL（光标停在语句上点 Execute）。
 
-### 2. 创建 GitHub 主题仓库
-新建一个公开仓库（如 `anon-chat-theme`），把 `theme/index.html` 推到 main 分支根目录。然后修改 `index.js` 顶部：
-```js
-themeURL: "https://raw.githubusercontent.com/<你的用户名>/anon-chat-theme/main/"
-```
+### 2. 主题仓库
+GitHub 新建公开仓库（如 `flarechat`），把 `theme/index.html` 推到 `main/theme/` 目录下。
+确认 `index.js` 顶部 `themeURL` 指向正确路径。
 
-### 3. 创建 KV namespace
-```bash
-wrangler kv namespace create ROOM_INDEX
-```
-把返回的 `id` 填入 `wrangler.toml`。
+### 3. Cloudflare Dashboard 部署
+1. **Workers & Pages** → **Create** → 创建一个新 Worker（比如叫 `flarechat`）
+2. 进入 Worker 编辑器，**全选删除默认代码，粘贴 `index.js` 全部内容**
+3. **Save and Deploy**
 
-### 4. 注入 TiDB 凭据
-```bash
-# 本地：复制 .env.example 为 .env 并填值（Wrangler 自 2025-08-08 起原生支持 .env）
-cp .env.example .env
+### 4. 绑定资源（Dashboard）
+进入 `flarechat` → **Settings**：
 
-# 线上：用 secret 注入（推荐）
-wrangler secret put TIDB_DATABASE_URL
-# 粘贴：mysql://<user>:<pass>@gateway01.<region>.prod.aws.tidbcloud.com:4000/<db>?ssl={"rejectUnauthorized":true}
-#
-# 或在 Cloudflare Dashboard：Workers & Pages → 你的 Worker → Settings → Variables and Secrets → Add
-```
+- **Bindings** → **Add binding** → **KV namespace**：
+  - Variable name: `ROOM_INDEX`
+  - 选你创建的 KV namespace（如 `flarechat-kv`）
 
-### 5. 本地调试 / 部署
-```bash
-wrangler dev      # 本地
-wrangler deploy   # 部署
-```
+- **Variables and Secrets** → **Add**：
+  - Type: **Secret** (或 Plaintext)
+  - Name: `TIDB_DATABASE_URL`
+  - Value: 你的 TiDB 连接串（`mysql://...`）
+
+保存后**重新部署** Worker。
 
 ## API 路由
 
@@ -52,30 +48,21 @@ wrangler deploy   # 部署
 | GET | `/` | 聊天 SPA（默认 `#lobby`） |
 | GET | `/r/<room>` | 进入指定房间 |
 | GET | `/rooms` | 活跃房间列表 |
-| POST | `/api/room/create` | 创建房间 `{name}` |
-| POST | `/api/upload` | 上传图片（multipart）→ `{ok, id, url}` |
+| GET | `/api/messages?room=&since=<id>` | 拉历史/增量消息 |
+| POST | `/api/send` | 发消息 `{room,type,text/imageId,nick}` |
+| POST | `/api/upload` | 上传图片（multipart）→ `{ok,id,url}` |
 | GET | `/img/<id>` | 获取图片（强缓存） |
-| WS  | `/ws/<room>` | 实时连接 |
+| POST | `/api/heartbeat?room=` | 心跳 `{clientId}` |
+| GET | `/api/online?room=` | 在线人数 `{n}` |
+| POST | `/api/room/create` | 创建房间 `{name}` |
 
 ## 功能
 
-- ✅ 多房间（URL 分享）
-- ✅ WebSocket 实时双向
-- ✅ 用户自设昵称（localStorage 记忆）
-- ✅ 自动颜色（基于昵称 hash）
-- ✅ 图片发送（Canvas 压缩到 1.5MB 内）
-- ✅ 最近 200 条消息历史（滚动清理，图片跟随消息删除）
-- ✅ IP 限流（消息 10/分钟，图片 3/分钟）
-- ✅ 在线人数广播
-- ✅ 心跳保活
-- ✅ 移动端响应式
-
-## 免费额度自检
-
-| 资源 | 用量 | 免费上限 |
-|------|------|---------|
-| Workers 请求 | ~5万/天 | 10万/天 |
-| DO | 与 WS 量级相同 | 含 |
-| TiDB row | 图片滚动 ~1GB | 5 GiB |
-| TiDB RU | ~10万/天 | 50M/月 |
-| KV | 房间清单+限流计数 | 10万读/天 |
+- 多房间（URL 分享）
+- 用户自设昵称（localStorage 记忆）
+- 自动颜色（基于昵称 hash）
+- 图片发送（Canvas 压缩到 1.5MB）
+- 最近 200 条消息历史（滚动清理，图片跟随消息删除）
+- IP 限流（消息 10/分钟，图片 3/分钟）
+- 在线人数（KV 心跳聚合）
+- 移动端响应式

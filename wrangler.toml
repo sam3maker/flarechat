@@ -1,21 +1,17 @@
-name = "anon-chat"
+# 仅作参考：纯 Dashboard 部署不需要这个文件
+# 如果你后续切换到 wrangler deploy，再用此配置
+
+name = "flarechat"
 main = "index.js"
 compatibility_date = "2025-06-01"
 
-# Durable Object：每个房间一个实例，负责 WebSocket 实时广播
-[[durable_objects.bindings]]
-name = "ROOMS"
-class_name = "RoomDO"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["RoomDO"]
-
-# KV：房间清单 + 限流计数（复用一个 namespace 省绑定）
+# KV 绑定：在 Dashboard → flarechat → Settings → Bindings 手动添加
+# 变量名：ROOM_INDEX → 你的 KV namespace
 [[kv_namespaces.binding]]
 name = "ROOM_INDEX"
-id = "<运行 `wrangler kv namespace create ROOM_INDEX` 后填这里>"
+id = "<在 Dashboard 创建后填这里>"
 
-# TiDB 凭据通过 secret 注入：
-#   wrangler secret put TIDB_DATABASE_URL
-# 形如：mysql://<user>:<pass>@gateway01.<region>.prod.aws.tidbcloud.com:4000/<db>?ssl={"rejectUnauthorized":true}
+# TiDB 凭据：在 Dashboard → flarechat → Settings → Variables and Secrets 添加
+# TIDB_DATABASE_URL = "mysql://..."
+
+# 注意：本版本无 Durable Objects，纯 HTTP 轮询，可在 Dashboard 直接粘贴 index.js 部署

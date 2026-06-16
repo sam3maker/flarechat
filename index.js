@@ -1,14 +1,14 @@
 'use strict';
 
 // ════════════════════════════════════════════════════════════
-//   匿名聊天室 · Cloudflare Workers + TiDB（单文件版）
-//   风格沿用 c.js：OPT 配置块、tidbQuery HTTP Data API、
-//   UNHEX/hex BLOB 约定、无 npm 依赖、if/else 路由链。
+//   flarechat · Cloudflare Workers + TiDB（单文件 · 纯 HTTP 轮询版）
+//   无 Durable Objects，无 npm 依赖，可在 Dashboard 直接粘贴部署。
+//   风格沿用 c.js：OPT 块、tidbQuery HTTP Data API、if/else 路由链。
 // ════════════════════════════════════════════════════════════
 
 const OPT = {
-  siteName: "匿名聊天室",
-  themeURL: "https://raw.githubusercontent.com/<你的用户名>/<theme-repo>/main/",
+  siteName: "flarechat",
+  themeURL: "https://raw.githubusercontent.com/sam3maker/flarechat/main/theme/",
   themeCacheTtl: 600,
   defaultRoom: "lobby",
   maxNickLen: 16,
@@ -17,9 +17,10 @@ const OPT = {
   historyLimit: 200,
   rateMsgPerMin: 10,
   rateImgPerMin: 3,
-  cleanupBatch: 20,
+  cleanupChance: 0.05,           // 每条消息后 5% 概率触发清理
   imgCacheSec: 86400,
   roomListSize: 50,
+  heartbeatTtl: 35,              // 心跳 KV TTL（秒），客户端 15s 续期一次
   roomNameRe: /^[a-z0-9_-]{1,32}$/,
   allowedImageMime: ["image/jpeg", "image/png", "image/webp", "image/gif"]
 };
@@ -122,18 +123,11 @@ function sanitizeNick(raw) {
   if (typeof raw !== 'string') return defaultNick();
   const s = raw.trim().slice(0, OPT.maxNickLen);
   if (!s) return defaultNick();
-  // 去掉 HTML/控制字符，避免注入
   return s.replace(/[<>&"'`\x00-\x1f]/g, '');
 }
 
 function validRoom(name) {
   return typeof name === 'string' && OPT.roomNameRe.test(name);
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[<>&"']/g, c => ({
-    '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;'
-  }[c]));
 }
 
 // ────────────────────────────────────────────────────────────
@@ -158,15 +152,27 @@ async function insertMessage(env, m) {
   );
 }
 
-async function getHistory(env, room) {
+async function getRecent(env, room) {
   const r = await tidbQuery(env,
     `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT ?`,
     [room, String(OPT.historyLimit)]
   );
-  const rows = r.rows || [];
-  rows.reverse();
-  return rows.map(row => ({
+  const rows = (r.rows || []).slice().reverse();
+  return rows.map(rowToMsg);
+}
+
+async function getSince(env, room, sinceId) {
+  const r = await tidbQuery(env,
+    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
+     FROM chat_messages WHERE room=? AND id > ? ORDER BY id ASC LIMIT 100`,
+    [room, String(sinceId)]
+  );
+  return (r.rows || []).map(rowToMsg);
+}
+
+function rowToMsg(row) {
+  return {
     id: String(row.id),
     nick: row.nick,
     color: row.color,
@@ -174,12 +180,11 @@ async function getHistory(env, room) {
     text: row.text || "",
     imageId: row.image_id || "",
     ts: Number(row.ts) * 1000
-  }));
+  };
 }
 
 // 溢出清理：删掉 200 条之外的消息，并联动删除对应图片
 async function cleanupRoom(env, room) {
-  // 找到当前房间第 200 条最新的 id
   const r = await tidbQuery(env,
     `SELECT id FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT 1 OFFSET ?`,
     [room, String(OPT.historyLimit)]
@@ -187,19 +192,16 @@ async function cleanupRoom(env, room) {
   if (!r.rows || r.rows.length === 0) return;
   const thresholdId = String(r.rows[0].id);
 
-  // 取出待删消息中的 image_id
   const dr = await tidbQuery(env,
     `SELECT image_id FROM chat_messages WHERE room=? AND id <= ? AND image_id IS NOT NULL`,
     [room, thresholdId]
   );
   const imgIds = (dr.rows || []).map(x => x.image_id).filter(Boolean);
 
-  // 删图片
   if (imgIds.length > 0) {
     const inList = imgIds.map(i => "'" + String(i).replace(/['\\]/g, m => '\\' + m) + "'").join(",");
     await tidbQuery(env, `DELETE FROM chat_images WHERE id IN (${inList})`, []);
   }
-  // 删消息
   await tidbQuery(env,
     `DELETE FROM chat_messages WHERE room=? AND id <= ?`,
     [room, thresholdId]
@@ -207,11 +209,10 @@ async function cleanupRoom(env, room) {
 }
 
 // ────────────────────────────────────────────────────────────
-//  图片持久化
+//  图片持久化（UNHEX/hex 约定）
 // ────────────────────────────────────────────────────────────
 const HEX_CHARS = "0123456789abcdef";
 function bytesToHex(uint8) {
-  // 分块拼接，避免大数组的 .map/join 触发 GC 与 CPU 爆表
   let out = '';
   const CHUNK = 0x8000;
   for (let i = 0; i < uint8.length; i += CHUNK) {
@@ -226,7 +227,6 @@ function bytesToHex(uint8) {
   return out;
 }
 async function insertImage(env, id, room, mime, size, uint8) {
-  // bytes → hex，TiDB 端 UNHEX 还原成 BLOB
   const hexStr = bytesToHex(uint8);
   await tidbQuery(env,
     `INSERT INTO chat_images (id, room, mime, size, data) VALUES (?, ?, ?, ?, UNHEX(?))`,
@@ -241,7 +241,6 @@ async function getImage(env, id) {
   );
   if (!r.rows || r.rows.length === 0) return null;
   const row = r.rows[0];
-  // data 是 hex string → bytes
   const hex = row.data;
   const bytes = new Uint8Array(hex.length / 2);
   for (let j = 0; j < hex.length; j += 2) {
@@ -251,7 +250,7 @@ async function getImage(env, id) {
 }
 
 // ────────────────────────────────────────────────────────────
-//  房间清单（KV）
+//  房间清单 + 心跳（KV）
 // ────────────────────────────────────────────────────────────
 async function touchRoom(env, name) {
   const raw = await env.ROOM_INDEX.get("ROOMS_INDEX");
@@ -268,8 +267,24 @@ async function listRooms(env) {
   try { return raw ? JSON.parse(raw) : []; } catch { return []; }
 }
 
+async function heartbeat(env, room, clientId) {
+  const key = `HB_${room}_${clientId}`;
+  await env.ROOM_INDEX.put(key, "1", { expirationTtl: OPT.heartbeatTtl });
+}
+
+async function countOnline(env, room) {
+  const prefix = `HB_${room}_`;
+  let count = 0, cursor;
+  do {
+    const r = await env.ROOM_INDEX.list({ prefix, cursor });
+    count += r.keys.length;
+    cursor = r.list_complete ? null : r.cursor;
+  } while (cursor);
+  return count;
+}
+
 // ────────────────────────────────────────────────────────────
-//  主题（远程 HTML）
+//  主题（远程 HTML，强制 Content-Type）
 // ────────────────────────────────────────────────────────────
 async function serveTheme(path) {
   const resp = await fetch(OPT.themeURL + path, {
@@ -277,8 +292,6 @@ async function serveTheme(path) {
   });
   if (!resp.ok) return new Response("theme not found: " + path, { status: 502 });
 
-  // raw.githubusercontent.com 默认返回 text/plain，浏览器会把 HTML 当源码显示
-  // 必须按扩展名强制 Content-Type
   let ct;
   if (path.endsWith(".html")) ct = "text/html; charset=utf-8";
   else if (path.endsWith(".css")) ct = "text/css; charset=utf-8";
@@ -297,8 +310,92 @@ async function serveTheme(path) {
 }
 
 // ────────────────────────────────────────────────────────────
-//  路由处理函数
+//  路由处理
 // ────────────────────────────────────────────────────────────
+async function handleMessages(env, url) {
+  try {
+    const room = url.searchParams.get("room") || OPT.defaultRoom;
+    if (!validRoom(room)) return jsonBody({ ok: 0, msg: "房间名非法" }, 400);
+    const sinceId = parseInt(url.searchParams.get("since") || "0", 10);
+    const msgs = sinceId > 0
+      ? await getSince(env, room, sinceId)
+      : await getRecent(env, room);
+    return jsonBody({ ok: 1, msgs });
+  } catch (err) {
+    return jsonBody({ ok: 0, msg: err.message }, 500);
+  }
+}
+
+async function handleSend(env, ip, body) {
+  try {
+    if (!await rateLimit(env, ip, "msg", OPT.rateMsgPerMin)) {
+      return jsonBody({ ok: 0, msg: "发得太快啦，休息一下" }, 429);
+    }
+    const room = body.room || OPT.defaultRoom;
+    if (!validRoom(room)) throw new Error("房间名非法");
+    const nick = sanitizeNick(body.nick);
+    const color = hashColor(nick + "|" + ip);
+
+    let enriched;
+    if (body.type === "text") {
+      const text = String(body.text || "").slice(0, OPT.maxMessageLen).trim();
+      if (!text) throw new Error("消息为空");
+      enriched = { type: "text", room, nick, color, text };
+    } else if (body.type === "image") {
+      const imageId = String(body.imageId || "").slice(0, 26);
+      if (!/^[A-Za-z0-9]{1,26}$/.test(imageId)) throw new Error("图片 id 非法");
+      enriched = { type: "image", room, nick, color, imageId };
+    } else {
+      throw new Error("消息类型非法");
+    }
+
+    await insertMessage(env, enriched);
+    await touchRoom(env, room);
+    await heartbeat(env, room, ip);   // 发消息也续期在线状态
+
+    if (Math.random() < OPT.cleanupChance) {
+      try { await cleanupRoom(env, room); } catch (e) {}
+    }
+
+    // 取回刚插入的 id/ts
+    const r = await tidbQuery(env,
+      `SELECT id, UNIX_TIMESTAMP(ts) AS ts FROM chat_messages
+       WHERE room=? AND nick=? AND type=? ORDER BY id DESC LIMIT 1`,
+      [room, nick, enriched.type]
+    );
+    if (r.rows && r.rows.length > 0) {
+      enriched.id = String(r.rows[0].id);
+      enriched.ts = Number(r.rows[0].ts) * 1000;
+    }
+    return jsonBody({ ok: 1, msg: enriched });
+  } catch (err) {
+    return jsonBody({ ok: 0, msg: err.message }, 400);
+  }
+}
+
+async function handleHeartbeat(env, url, body) {
+  try {
+    const room = url.searchParams.get("room") || body.room || OPT.defaultRoom;
+    if (!validRoom(room)) return jsonBody({ ok: 0, msg: "房间名非法" }, 400);
+    const clientId = String(body.clientId || genId()).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || "anon";
+    await heartbeat(env, room, clientId);
+    return jsonBody({ ok: 1 });
+  } catch (err) {
+    return jsonBody({ ok: 0, msg: err.message }, 400);
+  }
+}
+
+async function handleOnline(env, url) {
+  try {
+    const room = url.searchParams.get("room") || OPT.defaultRoom;
+    if (!validRoom(room)) return jsonBody({ ok: 0, msg: "房间名非法" }, 400);
+    const n = await countOnline(env, room);
+    return jsonBody({ ok: 1, n });
+  } catch (err) {
+    return jsonBody({ ok: 0, msg: err.message }, 500);
+  }
+}
+
 async function handleUpload(request, env, ip) {
   try {
     if (!await rateLimit(env, ip, "img", OPT.rateImgPerMin)) {
@@ -325,7 +422,7 @@ async function handleUpload(request, env, ip) {
 
 async function serveImage(env, id) {
   try {
-    const cached = await caches.default.match("https://img-cache/" + id);
+    const cached = await caches.default.match("https://img-cache.invalid/" + id);
     if (cached) return cached;
     const img = await getImage(env, id);
     if (!img) return new Response("Not Found", { status: 404 });
@@ -335,20 +432,14 @@ async function serveImage(env, id) {
       "Access-Control-Allow-Origin": "*"
     });
     const resp = new Response(img.bytes, { status: 200, headers });
-    ctx_try_cache(id, resp.clone());
+    try {
+      const key = new Request("https://img-cache.invalid/" + id);
+      caches.default.put(key, resp.clone()).catch(() => {});
+    } catch {}
     return resp;
   } catch (err) {
     return new Response("Error", { status: 500 });
   }
-}
-
-// 把图片响应放进 edge cache（不阻塞主流程）
-function ctx_try_cache(id, resp) {
-  try {
-    const key = new Request("https://img-cache/" + id);
-    // 用 waitUntil 安全：在 caches API 内部异步执行
-    caches.default.put(key, resp).catch(() => {});
-  } catch {}
 }
 
 async function handleCreateRoom(env, body) {
@@ -362,166 +453,6 @@ async function handleCreateRoom(env, body) {
   }
 }
 
-async function handleWsUpgrade(request, env, path) {
-  // path 形如 /ws/<room>
-  const m = path.match(/^\/ws\/([^\/]+)$/);
-  if (!m) return new Response("Bad Request", { status: 400 });
-  const room = decodeURIComponent(m[1]);
-  if (!validRoom(room)) return new Response("Invalid room", { status: 400 });
-
-  const id = env.ROOMS.idFromName(room);
-  const stub = env.ROOMS.get(id);
-
-  // 把客户端 IP 通过 header 透传给 DO
-  const ip = request.headers.get("CF-Connecting-IP") || "0";
-  const upstream = new Request(request, {
-    headers: new Headers(request.headers)
-  });
-  upstream.headers.set("X-Client-IP", ip);
-  upstream.headers.set("X-Room", room);
-  return stub.fetch(upstream);
-}
-
-// ────────────────────────────────────────────────────────────
-//  Durable Object: RoomDO（仅做 WS 广播 + 落库）
-// ────────────────────────────────────────────────────────────
-export class RoomDO {
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
-    this._room = null;
-    this._counter = 0;
-  }
-
-  async fetch(request) {
-    this._room = request.headers.get("X-Room") || OPT.defaultRoom;
-    const ip = request.headers.get("X-Client-IP") || "0";
-
-    const upgrade = request.headers.get("Upgrade");
-    if (upgrade !== "websocket") {
-      return new Response("Expected WS", { status: 426 });
-    }
-
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-
-    // 把元数据塞进 server 上下文（hibernation 时可读）
-    server._ip = ip;
-    server._nick = defaultNick();
-
-    this.state.acceptWebSocket(server);
-
-    // 推送历史 + 在线数
-    try {
-      const history = await getHistory(this.env, this._room);
-      server.send(JSON.stringify({ type: "history", msgs: history }));
-    } catch (e) {
-      server.send(JSON.stringify({ type: "error", msg: "历史加载失败" }));
-    }
-    this._broadcastOnline();
-
-    await touchRoom(this.env, this._room);
-
-    return new Response(null, { status: 101, webSocket: client });
-  }
-
-  async webSocketMessage(ws, msg) {
-    let m;
-    try { m = JSON.parse(msg); } catch {
-      ws.send(JSON.stringify({ type: "error", msg: "消息格式错误" }));
-      return;
-    }
-
-    // 用户自设昵称（默认沿用）
-    const nick = sanitizeNick(m.nick || ws._nick);
-    ws._nick = nick;
-    const color = hashColor(nick + "|" + ws._ip);
-
-    if (m.type === "ping") {
-      ws.send(JSON.stringify({ type: "pong", t: Date.now() }));
-      return;
-    }
-
-    if (!await rateLimit(this.env, ws._ip, "msg", OPT.rateMsgPerMin)) {
-      ws.send(JSON.stringify({ type: "error", msg: "发得太快啦，休息一下" }));
-      return;
-    }
-
-    if (m.type === "text") {
-      const text = String(m.text || "").slice(0, OPT.maxMessageLen).trim();
-      if (!text) return;
-      const enriched = {
-        type: "text",
-        room: this._room,
-        nick, color,
-        text,
-        ts: Date.now()
-      };
-      try {
-        await insertMessage(this.env, enriched);
-        this._counter++;
-        if (this._counter % OPT.cleanupBatch === 0) {
-          // 异步清理，不阻塞广播
-          this._maybeCleanup();
-        }
-        await touchRoom(this.env, this._room);
-        this._broadcast(enriched);
-      } catch (e) {
-        ws.send(JSON.stringify({ type: "error", msg: "发送失败" }));
-      }
-      return;
-    }
-
-    if (m.type === "image") {
-      const imageId = String(m.imageId || "").slice(0, 26);
-      if (!/^[A-Za-z0-9]{1,26}$/.test(imageId)) return;
-      const enriched = {
-        type: "image",
-        room: this._room,
-        nick, color,
-        imageId,
-        ts: Date.now()
-      };
-      try {
-        await insertMessage(this.env, enriched);
-        this._counter++;
-        this._broadcast(enriched);
-      } catch (e) {
-        ws.send(JSON.stringify({ type: "error", msg: "图片发送失败" }));
-      }
-      return;
-    }
-  }
-
-  async webSocketClose(ws, code, reason) {
-    this._broadcastOnline();
-  }
-
-  async webSocketError(ws, err) {
-    console.error("WS error:", err);
-    try { ws.close(1011, "server error"); } catch {}
-  }
-
-  _broadcast(obj) {
-    const data = typeof obj === "string" ? obj : JSON.stringify(obj);
-    const peers = this.state.getWebSockets();
-    for (const ws of peers) {
-      try { ws.send(data); } catch {}
-    }
-  }
-
-  _broadcastOnline() {
-    const n = this.state.getWebSockets().length;
-    this._broadcast({ type: "online", n });
-  }
-
-  async _maybeCleanup() {
-    try { await cleanupRoom(this.env, this._room); } catch (e) {
-      console.error("cleanup failed:", e);
-    }
-  }
-}
-
 // ────────────────────────────────────────────────────────────
 //  Worker 入口（module 格式，沿用 c.js 的 if/else 链）
 // ────────────────────────────────────────────────────────────
@@ -530,6 +461,7 @@ export default {
     const url = new URL(request.url);
     const method = request.method;
     const path = url.pathname;
+    const ip = request.headers.get("CF-Connecting-IP") || "0";
 
     if (method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS, status: 204 });
@@ -538,8 +470,6 @@ export default {
     if (method === "GET" && (path === "/" || path === "/index.html")) {
       return await serveTheme("index.html");
     }
-
-    // 房间页：直接返回 SPA HTML，房间名由前端解析
     if (method === "GET" && path.startsWith("/r/")) {
       return await serveTheme("index.html");
     }
@@ -548,25 +478,35 @@ export default {
       return jsonBody({ ok: 1, rooms: await listRooms(env) });
     }
 
+    if (method === "GET" && path === "/api/messages") {
+      return await handleMessages(env, url);
+    }
+    if (method === "GET" && path === "/api/online") {
+      return await handleOnline(env, url);
+    }
+
+    if (method === "POST" && path === "/api/send") {
+      let body;
+      try { body = await request.json(); } catch { body = {}; }
+      return await handleSend(env, ip, body);
+    }
+    if (method === "POST" && path === "/api/heartbeat") {
+      let body;
+      try { body = await request.json(); } catch { body = {}; }
+      return await handleHeartbeat(env, url, body);
+    }
     if (method === "POST" && path === "/api/room/create") {
       let body;
       try { body = await request.json(); } catch { body = {}; }
       return await handleCreateRoom(env, body);
     }
-
     if (method === "POST" && path === "/api/upload") {
-      const ip = request.headers.get("CF-Connecting-IP") || "0";
       return await handleUpload(request, env, ip);
     }
 
     if (method === "GET" && path.startsWith("/img/")) {
-      const id = path.slice(5);
+      const id = path.slice(5).replace(/[^A-Za-z0-9]/g, "");
       return await serveImage(env, id);
-    }
-
-    // WebSocket 升级
-    if (method === "GET" && request.headers.get("Upgrade") === "websocket") {
-      return await handleWsUpgrade(request, env, path);
     }
 
     return new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });

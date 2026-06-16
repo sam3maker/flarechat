@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
-<title>匿名聊天室</title>
+<title>flarechat</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; }
@@ -23,6 +23,7 @@ header {
 }
 .room-name { font-weight: 600; font-size: 16px; color: #fff; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+.dot.offline { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
 .online { font-size: 12px; color: #94a3b8; margin-left: auto; }
 .online b { color: #4ade80; }
 
@@ -38,7 +39,6 @@ main {
 .msg.mine { align-self: flex-end; background: linear-gradient(135deg, #6366f1, #8b5cf6); }
 .msg.mine .nick { color: rgba(255,255,255,0.85); }
 .msg.mine .body { color: #fff; }
-.msg.system { align-self: center; background: transparent; color: #64748b; font-size: 12px; padding: 4px; }
 
 footer {
   padding: 10px 12px; background: rgba(0,0,0,0.3);
@@ -74,17 +74,6 @@ footer {
 #send:active { transform: scale(0.96); }
 #send:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.connecting, .disconnected {
-  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-  flex-direction: column; gap: 12px; background: rgba(0,0,0,0.6); z-index: 100;
-  color: #fff; font-size: 14px;
-}
-.spinner {
-  width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2);
-  border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
 .toast {
   position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
   background: rgba(0,0,0,0.85); color: #fff; padding: 10px 18px;
@@ -106,7 +95,7 @@ footer {
 <body>
 
 <header>
-  <span class="dot"></span>
+  <span class="dot" id="dot"></span>
   <span class="room-name">#lobby</span>
   <span class="online">在线 <b id="online">0</b></span>
 </header>
@@ -120,11 +109,6 @@ footer {
   <button id="send">发送</button>
 </footer>
 
-<div class="connecting" id="overlay">
-  <div class="spinner"></div>
-  <div>正在连接...</div>
-</div>
-
 <script>
 (function() {
   'use strict';
@@ -137,14 +121,20 @@ footer {
   if (!/^[a-z0-9_-]{1,32}$/.test(room)) room = "lobby";
   document.querySelector(".room-name").textContent = "#" + room;
 
-  // 默认昵称生成器（与服务端一致，仅用作初始占位）
+  // 客户端唯一 ID（用于心跳统计在线人数）
+  var clientId = localStorage.getItem("cid");
+  if (!clientId) {
+    clientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem("cid", clientId);
+  }
+
+  // 默认昵称
   var ADJ = ["安静","快乐","勇敢","害羞","聪明","调皮","神秘","闪电","柔软","明亮","遥远","蓝色","金色","森林","海洋","银河","月光","火焰","微风","星辰"];
   var NOUN = ["的猫","的狐","的熊","的兔","的鲸","的鹰","的鹿","的狼","的鸭","的鱼","的狮","的羊","的象","的虎","的雀","的蜂","的海豚","的水母","的考拉"];
   function randNick() {
     return ADJ[Math.floor(Math.random()*ADJ.length)] + NOUN[Math.floor(Math.random()*NOUN.length)] + Math.floor(Math.random()*90+10);
   }
 
-  // 用户自设昵称：localStorage 持久化
   var nickInput = document.getElementById("nickInput");
   nickInput.value = localStorage.getItem("nick") || randNick();
   function getNick() {
@@ -157,67 +147,77 @@ footer {
     toast("昵称已更新");
   });
 
-  // WebSocket 连接
-  var proto = location.protocol === "https:" ? "wss" : "ws";
-  var ws = null;
-  var overlay = document.getElementById("overlay");
   var online = document.getElementById("online");
+  var dot = document.getElementById("dot");
   var msgBox = document.getElementById("messages");
   var textInput = document.getElementById("text");
   var sendBtn = document.getElementById("send");
   var fileInput = document.getElementById("file");
-  var myNick = getNick();
+  var lastId = 0;
 
-  function connect() {
-    ws = new WebSocket(proto + "://" + location.host + "/ws/" + encodeURIComponent(room));
-    ws.onopen = function() {
-      overlay.style.display = "none";
-    };
-    ws.onclose = function() {
-      overlay.querySelector("div:last-child").textContent = "连接断开，重连中...";
-      overlay.querySelector(".spinner").style.borderTopColor = "#ef4444";
-      overlay.style.display = "flex";
-      setTimeout(connect, 2000);
-    };
-    ws.onerror = function() { try { ws.close(); } catch(e) {} };
-    ws.onmessage = function(e) {
-      var m; try { m = JSON.parse(e.data); } catch { return; }
-      if (m.type === "history") {
-        m.msgs.forEach(renderMsg);
-        scrollBottom();
-      } else if (m.type === "online") {
-        online.textContent = m.n;
-      } else if (m.type === "error") {
-        toast(m.msg || "出错了");
-      } else if (m.type === "pong") {
-        // heartbeat ack
-      } else {
-        renderMsg(m);
-        scrollBottom();
-      }
-    };
+  // ── 历史加载（一次性，初次进入）──
+  function loadHistory() {
+    fetch("/api/messages?room=" + encodeURIComponent(room))
+      .then(function(r){ return r.json(); })
+      .then(function(data) {
+        if (data.ok && data.msgs) {
+          data.msgs.forEach(renderMsg);
+          if (data.msgs.length > 0) lastId = Number(data.msgs[data.msgs.length - 1].id);
+          scrollBottom();
+        }
+      })
+      .catch(function(){});
   }
-  connect();
 
-  // 心跳
-  setInterval(function() {
-    if (ws && ws.readyState === 1) {
-      try { ws.send(JSON.stringify({ type: "ping" })); } catch(e) {}
-    }
-  }, 30000);
+  // ── 轮询新消息（每 2 秒）──
+  function poll() {
+    fetch("/api/messages?room=" + encodeURIComponent(room) + "&since=" + lastId)
+      .then(function(r){ return r.json(); })
+      .then(function(data) {
+        if (data.ok && data.msgs && data.msgs.length > 0) {
+          data.msgs.forEach(renderMsg);
+          if (data.msgs.length > 0) lastId = Number(data.msgs[data.msgs.length - 1].id);
+          scrollBottom();
+        }
+      })
+      .catch(function(){});
+  }
 
-  // 渲染消息
+  // ── 在线人数（每 15 秒）──
+  function refreshOnline() {
+    fetch("/api/online?room=" + encodeURIComponent(room))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (data.ok) online.textContent = data.n;
+      })
+      .catch(function(){});
+  }
+
+  function heartbeat() {
+    fetch("/api/heartbeat?room=" + encodeURIComponent(room), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: clientId })
+    }).catch(function(){});
+  }
+
+  // 启动
+  loadHistory();
+  heartbeat();
+  refreshOnline();
+  setInterval(poll, 2000);
+  setInterval(function() { heartbeat(); refreshOnline(); }, 15000);
+
+  // ── 渲染消息 ──
   function renderMsg(m) {
     var mine = m.nick === getNick();
     var div = document.createElement("div");
     div.className = "msg" + (mine ? " mine" : "");
-
     var nickEl = document.createElement("div");
     nickEl.className = "nick";
     nickEl.textContent = m.nick;
     nickEl.style.color = m.color;
     div.appendChild(nickEl);
-
     var body = document.createElement("div");
     body.className = "body";
     if (m.type === "text") {
@@ -230,7 +230,6 @@ footer {
       body.appendChild(img);
     }
     div.appendChild(body);
-
     if (m.ts) {
       var t = document.createElement("div");
       t.className = "time";
@@ -245,20 +244,30 @@ footer {
     requestAnimationFrame(function() { msgBox.scrollTop = msgBox.scrollHeight; });
   }
 
-  // 发送文本
+  // ── 发送文本 ──
   function sendText() {
     var v = textInput.value.trim();
     if (!v) return;
-    myNick = getNick();
-    ws.send(JSON.stringify({ type: "text", text: v, nick: myNick }));
-    textInput.value = "";
+    sendBtn.disabled = true;
+    fetch("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: room, type: "text", text: v, nick: getNick() })
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(data) {
+        if (!data.ok) toast(data.msg || "发送失败");
+        else { textInput.value = ""; poll(); }
+      })
+      .catch(function(){ toast("网络错误"); })
+      .finally(function(){ sendBtn.disabled = false; });
   }
   sendBtn.onclick = sendText;
   textInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
   });
 
-  // 上传图片：Canvas 压缩到 1.5MB 内
+  // ── 上传图片 ──
   fileInput.onchange = async function(e) {
     var f = e.target.files[0];
     if (!f) return;
@@ -271,7 +280,12 @@ footer {
       var r = await fetch("/api/upload", { method: "POST", body: fd });
       var data = await r.json();
       if (data.ok) {
-        ws.send(JSON.stringify({ type: "image", imageId: data.id, nick: getNick() }));
+        await fetch("/api/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick() })
+        });
+        poll();
       } else {
         toast(data.msg || "上传失败");
       }
@@ -306,7 +320,7 @@ footer {
     return out;
   }
 
-  // toast
+  // ── toast ──
   function toast(msg) {
     var t = document.createElement("div");
     t.className = "toast";
@@ -315,7 +329,7 @@ footer {
     setTimeout(function() { t.remove(); }, 2600);
   }
 
-  // lightbox
+  // ── lightbox ──
   function lightbox(src) {
     var d = document.createElement("div");
     d.className = "lightbox";
