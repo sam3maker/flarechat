@@ -90,6 +90,51 @@ footer {
   display: flex; align-items: center; justify-content: center; cursor: zoom-out;
 }
 .lightbox img { max-width: 95vw; max-height: 95vh; }
+
+.room-name { cursor: pointer; padding: 4px 8px; margin-left: -8px; border-radius: 6px; transition: background 0.15s; }
+.room-name:hover { background: rgba(255,255,255,0.08); }
+.room-name::after { content: " ▾"; font-size: 12px; opacity: 0.6; }
+
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 250; backdrop-filter: blur(4px);
+}
+.modal {
+  background: #1f2235; border-radius: 12px; padding: 20px;
+  width: 90%; max-width: 400px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.modal h3 { color: #fff; margin-bottom: 14px; font-size: 16px; font-weight: 600; }
+.room-input-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.room-input-row input {
+  flex: 1; padding: 8px 10px; min-width: 0;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: #fff; border-radius: 8px; outline: none; font-size: 13px;
+}
+.room-input-row input:focus { border-color: #6366f1; }
+.room-input-row button {
+  padding: 8px 14px; background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px;
+}
+.room-input-row button:active { transform: scale(0.96); }
+.room-list-title { color: #94a3b8; font-size: 12px; margin-bottom: 8px; }
+.room-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.room-item {
+  padding: 10px 12px; background: rgba(255,255,255,0.04);
+  border-radius: 8px; cursor: pointer; color: #e8e8e8; font-size: 14px;
+  transition: background 0.15s;
+}
+.room-item:hover { background: rgba(99,102,241,0.2); }
+.room-item.active { background: rgba(99,102,241,0.35); color: #fff; }
+.room-item.empty { opacity: 0.5; cursor: default; }
+.room-item.empty:hover { background: rgba(255,255,255,0.04); }
+.modal-close {
+  margin-top: 14px; width: 100%; padding: 8px;
+  background: transparent; border: 1px solid rgba(255,255,255,0.12);
+  color: #94a3b8; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.modal-close:hover { background: rgba(255,255,255,0.04); }
 </style>
 </head>
 <body>
@@ -108,6 +153,19 @@ footer {
   <label class="img-btn" title="发送图片">＋<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" id="file" hidden></label>
   <button id="send">发送</button>
 </footer>
+
+<div id="roomModal" class="modal-mask" hidden>
+  <div class="modal">
+    <h3>切换房间</h3>
+    <div class="room-input-row">
+      <input id="roomInput" placeholder="房间名（小写字母/数字/_-）" maxlength="32" autocomplete="off">
+      <button id="roomGo">进入</button>
+    </div>
+    <div class="room-list-title">活跃房间</div>
+    <div id="roomList" class="room-list"></div>
+    <button class="modal-close">关闭</button>
+  </div>
+</div>
 
 <script>
 (function() {
@@ -154,6 +212,62 @@ footer {
   var sendBtn = document.getElementById("send");
   var fileInput = document.getElementById("file");
   var lastId = 0;
+
+  // ── 房间切换 ──
+  var roomModal = document.getElementById("roomModal");
+  var roomInput = document.getElementById("roomInput");
+  var roomList = document.getElementById("roomList");
+  document.querySelector(".room-name").onclick = openRoomModal;
+  document.querySelector(".modal-close").onclick = function() { roomModal.hidden = true; };
+  roomModal.addEventListener("click", function(e) {
+    if (e.target === roomModal) roomModal.hidden = true;
+  });
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape" && !roomModal.hidden) roomModal.hidden = true;
+  });
+
+  function openRoomModal() {
+    roomModal.hidden = false;
+    roomInput.value = "";
+    loadRooms();
+    setTimeout(function(){ roomInput.focus(); }, 50);
+  }
+  function gotoRoom(name) {
+    name = (name || "").toLowerCase().trim();
+    if (!/^[a-z0-9_-]{1,32}$/.test(name)) {
+      toast("房间名只能是小写字母、数字、_ 或 -");
+      return;
+    }
+    location.href = "/r/" + encodeURIComponent(name);
+  }
+  document.getElementById("roomGo").onclick = function() { gotoRoom(roomInput.value); };
+  roomInput.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") gotoRoom(roomInput.value);
+  });
+  function loadRooms() {
+    fetch("/rooms")
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        roomList.innerHTML = "";
+        if (!data.ok || !data.rooms || data.rooms.length === 0) {
+          var empty = document.createElement("div");
+          empty.className = "room-item empty";
+          empty.textContent = "还没有活跃房间，输入一个名字创建吧";
+          roomList.appendChild(empty);
+          return;
+        }
+        data.rooms.forEach(function(r) {
+          var item = document.createElement("div");
+          item.className = "room-item" + (r.name === room ? " active" : "");
+          item.textContent = "#" + r.name;
+          item.onclick = function() { gotoRoom(r.name); };
+          roomList.appendChild(item);
+        });
+      })
+      .catch(function(){
+        roomList.innerHTML = '<div class="room-item empty">加载失败</div>';
+      });
+  }
 
   // ── 历史加载（一次性，初次进入）──
   function loadHistory() {
