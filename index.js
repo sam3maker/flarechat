@@ -156,7 +156,7 @@ async function getRecent(env, room) {
   const r = await tidbQuery(env,
     `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT ?`,
-    [room, String(OPT.historyLimit)]
+    [room, OPT.historyLimit]
   );
   const rows = (r.rows || []).slice().reverse();
   return rows.map(rowToMsg);
@@ -166,7 +166,7 @@ async function getSince(env, room, sinceId) {
   const r = await tidbQuery(env,
     `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? AND id > ? ORDER BY id ASC LIMIT 100`,
-    [room, String(sinceId)]
+    [room, sinceId]
   );
   return (r.rows || []).map(rowToMsg);
 }
@@ -188,7 +188,7 @@ function rowToMsg(row) {
 async function cleanupRoom(env, room) {
   const r = await tidbQuery(env,
     `SELECT id FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT 1 OFFSET ?`,
-    [room, String(OPT.historyLimit)]
+    [room, OPT.historyLimit]
   );
   if (!r.rows || r.rows.length === 0) return;
   const thresholdId = String(r.rows[0].id);
