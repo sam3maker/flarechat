@@ -266,7 +266,10 @@ footer {
   // ── 历史加载（一次性，初次进入）──
   function loadHistory() {
     fetch("/api/messages?room=" + encodeURIComponent(room))
-      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function(data) {
         msgBox.innerHTML = "";
         renderedIds = {};
@@ -274,23 +277,39 @@ footer {
           data.msgs.forEach(renderMsg);
           if (data.msgs.length > 0) lastId = Number(data.msgs[data.msgs.length - 1].id);
           scrollBottom();
+        } else if (!data.ok) {
+          toast("加载历史失败：" + (data.msg || "未知错误"));
         }
       })
-      .catch(function(){});
+      .catch(function(err){
+        console.error("[loadHistory]", err);
+        toast("加载历史失败：" + err.message + "（可能是 Cloudflare 拦截，请检查 WAF 规则）");
+      });
   }
 
   // ── 轮询新消息（每 2 秒）──
+  var pollErrorCount = 0;
   function poll() {
     fetch("/api/messages?room=" + encodeURIComponent(room) + "&since=" + lastId)
-      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function(data) {
+        pollErrorCount = 0;
         if (data.ok && data.msgs && data.msgs.length > 0) {
           data.msgs.forEach(renderMsg);
           if (data.msgs.length > 0) lastId = Number(data.msgs[data.msgs.length - 1].id);
           scrollBottom();
         }
       })
-      .catch(function(){});
+      .catch(function(err){
+        pollErrorCount++;
+        if (pollErrorCount === 3) {
+          console.error("[poll]", err);
+          toast("轮询失败：" + err.message);
+        }
+      });
   }
 
   // ── 在线人数（每 15 秒）──
