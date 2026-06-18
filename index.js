@@ -100,7 +100,7 @@ function hashColor(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   const hue = h % 360;
-  return hslToHex(hue, 65, 55);
+  return hslToHex(hue, 75, 65);   // 高饱和度+亮度，避免接近黑色，深色背景下清晰可见
 }
 
 function hslToHex(h, s, l) {
@@ -179,7 +179,8 @@ function rowToMsg(row) {
     type: row.type,
     text: row.text || "",
     imageId: row.image_id || "",
-    ts: Number(row.ts) * 1000
+    ts: Number(row.ts) * 1000,
+    recalled: row.type === "recalled"
   };
 }
 
@@ -385,6 +386,44 @@ async function handleHeartbeat(env, url, body) {
   }
 }
 
+// 撤回消息（软删除：仅本人 + 5 分钟内）
+async function handleRecall(env, ip, body) {
+  try {
+    const id = String(body.id || "").replace(/[^0-9]/g, "");
+    if (!id) throw new Error("缺少消息 id");
+    const nick = sanitizeNick(body.nick);
+
+    const r = await tidbQuery(env,
+      `SELECT nick, type, image_id, UNIX_TIMESTAMP(ts) AS ts
+       FROM chat_messages WHERE id=?`,
+      [id]
+    );
+    if (!r.rows || r.rows.length === 0) throw new Error("消息不存在");
+    const row = r.rows[0];
+    if (row.type === "recalled") throw new Error("消息已被撤回");
+    if (row.nick !== nick) throw new Error("只能撤回自己的消息");
+    const ageSec = Math.floor(Date.now() / 1000) - Number(row.ts);
+    if (ageSec > 300) throw new Error("超过 5 分钟，不能撤回");
+
+    await tidbQuery(env,
+      `UPDATE chat_messages SET type='recalled', text='消息已撤回', image_id=NULL WHERE id=?`,
+      [id]
+    );
+
+    if (row.type === "image" && row.image_id) {
+      try {
+        await tidbQuery(env,
+          `DELETE FROM chat_images WHERE id=?`,
+          [String(row.image_id)]
+        );
+      } catch (e) {}
+    }
+    return jsonBody({ ok: 1 });
+  } catch (err) {
+    return jsonBody({ ok: 0, msg: err.message }, 400);
+  }
+}
+
 async function handleOnline(env, url) {
   try {
     const room = url.searchParams.get("room") || OPT.defaultRoom;
@@ -495,6 +534,11 @@ export default {
       let body;
       try { body = await request.json(); } catch { body = {}; }
       return await handleHeartbeat(env, url, body);
+    }
+    if (method === "POST" && path === "/api/recall") {
+      let body;
+      try { body = await request.json(); } catch { body = {}; }
+      return await handleRecall(env, ip, body);
     }
     if (method === "POST" && path === "/api/room/create") {
       let body;
