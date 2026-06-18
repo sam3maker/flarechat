@@ -339,8 +339,14 @@ footer {
     })
       .then(function(r){ return r.json(); })
       .then(function(data) {
-        if (!data.ok) toast(data.msg || "发送失败");
-        else { textInput.value = ""; poll(); }
+        if (!data.ok) { toast(data.msg || "发送失败"); return; }
+        textInput.value = "";
+        if (data.msg && data.msg.id) {
+          renderMsg(data.msg);
+          var newId = Number(data.msg.id);
+          if (newId > lastId) lastId = newId;
+          scrollBottom();
+        }
       })
       .catch(function(){ toast("网络错误"); })
       .finally(function(){ sendBtn.disabled = false; });
@@ -363,12 +369,18 @@ footer {
       var r = await fetch("/api/upload", { method: "POST", body: fd });
       var data = await r.json();
       if (data.ok) {
-        await fetch("/api/send", {
+        var sendResp = await fetch("/api/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick() })
         });
-        poll();
+        var sendData = await sendResp.json();
+        if (sendData.ok && sendData.msg && sendData.msg.id) {
+          renderMsg(sendData.msg);
+          var newId = Number(sendData.msg.id);
+          if (newId > lastId) lastId = newId;
+          scrollBottom();
+        }
       } else {
         toast(data.msg || "上传失败");
       }
