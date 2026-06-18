@@ -100,6 +100,7 @@ footer {
   display: flex; align-items: center; justify-content: center;
   z-index: 250; backdrop-filter: blur(4px);
 }
+.modal-mask[hidden] { display: none !important; }
 .modal {
   background: #1f2235; border-radius: 12px; padding: 20px;
   width: 90%; max-width: 400px;
@@ -118,17 +119,11 @@ footer {
   border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px;
 }
 .room-input-row button:active { transform: scale(0.96); }
-.room-list-title { color: #94a3b8; font-size: 12px; margin-bottom: 8px; }
-.room-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.room-item {
-  padding: 10px 12px; background: rgba(255,255,255,0.04);
-  border-radius: 8px; cursor: pointer; color: #e8e8e8; font-size: 14px;
-  transition: background 0.15s;
+.room-hint {
+  font-size: 12px; color: #94a3b8; line-height: 1.5; margin-bottom: 4px;
+  padding: 10px 12px; background: rgba(255,255,255,0.03);
+  border-radius: 8px; border-left: 2px solid #6366f1;
 }
-.room-item:hover { background: rgba(99,102,241,0.2); }
-.room-item.active { background: rgba(99,102,241,0.35); color: #fff; }
-.room-item.empty { opacity: 0.5; cursor: default; }
-.room-item.empty:hover { background: rgba(255,255,255,0.04); }
 .modal-close {
   margin-top: 14px; width: 100%; padding: 8px;
   background: transparent; border: 1px solid rgba(255,255,255,0.12);
@@ -156,13 +151,12 @@ footer {
 
 <div id="roomModal" class="modal-mask" hidden>
   <div class="modal">
-    <h3>切换房间</h3>
+    <h3>进入房间</h3>
     <div class="room-input-row">
       <input id="roomInput" placeholder="房间名（小写字母/数字/_-）" maxlength="32" autocomplete="off">
       <button id="roomGo">进入</button>
     </div>
-    <div class="room-list-title">活跃房间</div>
-    <div id="roomList" class="room-list"></div>
+    <div class="room-hint">房间不会公开展示，把房间名直接分享给朋友即可加入。</div>
     <button class="modal-close">关闭</button>
   </div>
 </div>
@@ -216,7 +210,6 @@ footer {
   // ── 房间切换 ──
   var roomModal = document.getElementById("roomModal");
   var roomInput = document.getElementById("roomInput");
-  var roomList = document.getElementById("roomList");
   document.querySelector(".room-name").onclick = openRoomModal;
   document.querySelector(".modal-close").onclick = function() { roomModal.hidden = true; };
   roomModal.addEventListener("click", function(e) {
@@ -229,7 +222,6 @@ footer {
   function openRoomModal() {
     roomModal.hidden = false;
     roomInput.value = "";
-    loadRooms();
     setTimeout(function(){ roomInput.focus(); }, 50);
   }
   function gotoRoom(name) {
@@ -238,36 +230,13 @@ footer {
       toast("房间名只能是小写字母、数字、_ 或 -");
       return;
     }
+    roomModal.hidden = true;
     location.href = "/r/" + encodeURIComponent(name);
   }
   document.getElementById("roomGo").onclick = function() { gotoRoom(roomInput.value); };
   roomInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter") gotoRoom(roomInput.value);
   });
-  function loadRooms() {
-    fetch("/rooms")
-      .then(function(r){ return r.json(); })
-      .then(function(data){
-        roomList.innerHTML = "";
-        if (!data.ok || !data.rooms || data.rooms.length === 0) {
-          var empty = document.createElement("div");
-          empty.className = "room-item empty";
-          empty.textContent = "还没有活跃房间，输入一个名字创建吧";
-          roomList.appendChild(empty);
-          return;
-        }
-        data.rooms.forEach(function(r) {
-          var item = document.createElement("div");
-          item.className = "room-item" + (r.name === room ? " active" : "");
-          item.textContent = "#" + r.name;
-          item.onclick = function() { gotoRoom(r.name); };
-          roomList.appendChild(item);
-        });
-      })
-      .catch(function(){
-        roomList.innerHTML = '<div class="room-item empty">加载失败</div>';
-      });
-  }
 
   // ── 历史加载（一次性，初次进入）──
   function loadHistory() {

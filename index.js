@@ -475,7 +475,8 @@ export default {
     }
 
     if (method === "GET" && path === "/rooms") {
-      return jsonBody({ ok: 1, rooms: await listRooms(env) });
+      // 出于房间隐私考虑，不公开活跃房间列表
+      return jsonBody({ ok: 1, rooms: [] });
     }
 
     if (method === "GET" && path === "/api/messages") {
