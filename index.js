@@ -126,6 +126,13 @@ function sanitizeNick(raw) {
   return s.replace(/[<>&"'`\x00-\x1f]/g, '');
 }
 
+function sanitizeIcon(raw) {
+  if (typeof raw !== 'string') return "";
+  // 1-8 字符，去掉 HTML/控制字符
+  const s = raw.trim().slice(0, 8).replace(/[<>&"'`\x00-\x1f]/g, '');
+  return s;
+}
+
 function validRoom(name) {
   return typeof name === 'string' && OPT.roomNameRe.test(name);
 }
@@ -147,14 +154,14 @@ async function rateLimit(env, ip, action, limit) {
 // ────────────────────────────────────────────────────────────
 async function insertMessage(env, m) {
   await tidbQuery(env,
-    `INSERT INTO chat_messages (room, nick, color, type, text, image_id) VALUES (?, ?, ?, ?, ?, ?)`,
-    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null]
+    `INSERT INTO chat_messages (room, nick, color, type, text, image_id, icon) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null, m.icon || null]
   );
 }
 
 async function getRecent(env, room) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, icon, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT ?`,
     [room, OPT.historyLimit]
   );
@@ -164,7 +171,7 @@ async function getRecent(env, room) {
 
 async function getSince(env, room, sinceId) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, icon, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? AND id > ? ORDER BY id ASC LIMIT 100`,
     [room, sinceId]
   );
@@ -179,6 +186,7 @@ function rowToMsg(row) {
     type: row.type,
     text: row.text || "",
     imageId: row.image_id || "",
+    icon: row.icon || "",
     ts: Number(row.ts) * 1000,
     recalled: row.type === "recalled"
   };
@@ -336,16 +344,17 @@ async function handleSend(env, ip, body) {
     if (!validRoom(room)) throw new Error("房间名非法");
     const nick = sanitizeNick(body.nick);
     const color = hashColor(nick + "|" + ip);
+    const icon = sanitizeIcon(body.icon);
 
     let enriched;
     if (body.type === "text") {
       const text = String(body.text || "").slice(0, OPT.maxMessageLen).trim();
       if (!text) throw new Error("消息为空");
-      enriched = { type: "text", room, nick, color, text };
+      enriched = { type: "text", room, nick, color, icon, text };
     } else if (body.type === "image") {
       const imageId = String(body.imageId || "").slice(0, 26);
       if (!/^[A-Za-z0-9]{1,26}$/.test(imageId)) throw new Error("图片 id 非法");
-      enriched = { type: "image", room, nick, color, imageId };
+      enriched = { type: "image", room, nick, color, icon, imageId };
     } else {
       throw new Error("消息类型非法");
     }

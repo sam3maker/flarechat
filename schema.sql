@@ -28,5 +28,8 @@ CREATE TABLE IF NOT EXISTS chat.chat_images (
   INDEX idx_img_room (room)
 );
 
--- ─── 第 4 条：验证（独立执行）────────────────────
+-- ─── 第 4 条：消息表加 icon 字段（独立执行，已建表后追加）──
+ALTER TABLE chat.chat_messages ADD COLUMN IF NOT EXISTS icon VARCHAR(16) DEFAULT NULL;
+
+-- ─── 第 5 条：验证（独立执行）────────────────────
 SHOW TABLES IN chat;
