@@ -20,7 +20,7 @@ const OPT = {
   cleanupChance: 0.05,           // 每条消息后 5% 概率触发清理
   imgCacheSec: 86400,
   roomListSize: 50,
-  heartbeatTtl: 35,              // 心跳 KV TTL（秒），客户端 15s 续期一次
+  heartbeatTtl: 60,              // 心跳 KV TTL（秒，KV 最小值 60），客户端 15s 续期一次
   roomNameRe: /^[a-z0-9_-]{1,32}$/,
   allowedImageMime: ["image/jpeg", "image/png", "image/webp", "image/gif"]
 };
