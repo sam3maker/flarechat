@@ -9,7 +9,7 @@
 const OPT = {
   siteName: "flarechat",
   themeURL: "https://raw.githubusercontent.com/sam3maker/flarechat/main/theme/",
-  faviconURL: "",                 // 留空 → 默认 💬 emoji SVG；填 URL → 透传该 favicon
+  faviconURL: "https://s3m-soft.cc.cd/favicon.ico",                 // 留空 → 默认 💬 emoji SVG；填 URL → 透传该 favicon
   themeCacheTtl: 600,
   defaultRoom: "lobby",
   maxNickLen: 16,

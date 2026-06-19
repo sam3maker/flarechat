@@ -41,7 +41,10 @@ main {
   font-size: 13px; font-weight: 600;
   margin-right: 1em;
   flex-shrink: 0; user-select: none;
+  cursor: pointer; text-decoration: underline dotted rgba(255,255,255,0.25);
+  text-underline-offset: 3px;
 }
+.msg .nick:hover { text-decoration: underline dotted currentColor; }
 .msg .body {
   flex: 1; min-width: 0;
   font-size: 14px; color: #f1f1f1;
@@ -214,15 +217,13 @@ footer {
 
 <div id="uidModal" class="modal-mask" hidden>
   <div class="modal">
-    <h3>你的专属编号</h3>
+    <h3 id="uidTitle">用户编号</h3>
     <div class="uid-box" id="uidBox">读取中...</div>
-    <div class="room-hint">
+    <div id="uidSub" class="room-hint">
       这是系统分配给你的<strong>永久唯一编号</strong>，刷新或换设备后只要编号相同，
       就视为同一个人，可以互相撤回消息。
-      <br><br>
-      请妥善保存：换浏览器/设备时，手动输入相同编号即可恢复身份。
     </div>
-    <div class="uid-actions">
+    <div id="uidSetWrap" class="uid-actions">
       <input id="uidInput" placeholder="换设备时填入旧编号恢复身份" maxlength="16" autocomplete="off">
       <button id="uidSet" class="primary">设定</button>
     </div>
@@ -285,22 +286,25 @@ footer {
     toast("昵称已更新");
   });
 
-  // ── 点击昵称弹窗显示编号 ──
+  // ── 用户编号弹窗（查看自己/对方；自己可改）──
   var uidModal = document.getElementById("uidModal");
+  var uidTitle = document.getElementById("uidTitle");
   var uidBox = document.getElementById("uidBox");
+  var uidSub = document.getElementById("uidSub");
   var uidInput = document.getElementById("uidInput");
-  nickInput.style.cursor = "pointer";
-  nickInput.addEventListener("focus", function(){ nickInput.blur(); openUidModal(); });
-  nickInput.addEventListener("click", openUidModal);
-  function openUidModal() {
-    uidBox.textContent = myUid ? ("#" + myUid) : "正在生成...";
+  var uidSetWrap = document.getElementById("uidSetWrap");
+
+  function showUid(uid, nick, isMine) {
+    uidTitle.textContent = isMine ? "你的专属编号" : (nick + " 的编号");
+    uidBox.textContent = uid ? ("#" + uid) : "该用户没有编号（旧消息）";
+    uidSub.style.display = isMine ? "" : "none";
+    uidSetWrap.style.display = isMine ? "" : "none";
     uidInput.value = "";
-    if (!myUid) ensureUid();
     uidModal.hidden = false;
-    // 等 uid 生成完再刷新显示
-    setTimeout(function(){
-      if (myUid) uidBox.textContent = "#" + myUid;
-    }, 1500);
+    if (isMine && !uid) {
+      ensureUid();
+      setTimeout(function(){ if (myUid) uidBox.textContent = "#" + myUid; }, 1500);
+    }
   }
   function closeUidModal() { uidModal.hidden = true; }
   uidModal.addEventListener("click", function(e){ if (e.target === uidModal) closeUidModal(); });
@@ -447,6 +451,9 @@ footer {
     nickEl.className = "nick";
     nickEl.textContent = m.nick;
     nickEl.style.color = m.color || "#cbd5e1";
+    nickEl.style.cursor = "pointer";
+    nickEl.title = "点击查看编号";
+    nickEl.onclick = function() { showUid(m.uid, m.nick, mine); };
     div.appendChild(nickEl);
 
     var body = document.createElement("div");
