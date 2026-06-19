@@ -168,21 +168,6 @@ footer {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   letter-spacing: 2px; user-select: all;
 }
-.uid-actions {
-  display: flex; gap: 8px; margin: 12px 0;
-}
-.uid-actions input {
-  flex: 1; padding: 8px 10px; min-width: 0;
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-  color: #fff; border-radius: 8px; outline: none; font-size: 13px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-.uid-actions input:focus { border-color: #6366f1; }
-.uid-actions .primary {
-  padding: 8px 14px; background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px;
-}
-.uid-actions .primary:active { transform: scale(0.96); }
 
 </style>
 </head>
@@ -219,13 +204,9 @@ footer {
   <div class="modal">
     <h3 id="uidTitle">用户编号</h3>
     <div class="uid-box" id="uidBox">读取中...</div>
-    <div id="uidSub" class="room-hint">
-      这是系统分配给你的<strong>永久唯一编号</strong>，刷新或换设备后只要编号相同，
-      就视为同一个人，可以互相撤回消息。
-    </div>
-    <div id="uidSetWrap" class="uid-actions">
-      <input id="uidInput" placeholder="换设备时填入旧编号恢复身份" maxlength="16" autocomplete="off">
-      <button id="uidSet" class="primary">设定</button>
+    <div class="room-hint">
+      编号是系统自动分配的<strong>永久唯一标识</strong>，同编号可以互相撤回消息。
+      编号由服务端生成并校验唯一性，无法手动指定或修改。
     </div>
     <button class="modal-close">关闭</button>
   </div>
@@ -286,20 +267,14 @@ footer {
     toast("昵称已更新");
   });
 
-  // ── 用户编号弹窗（查看自己/对方；自己可改）──
+  // ── 用户编号弹窗（纯展示，不可手动设置）──
   var uidModal = document.getElementById("uidModal");
   var uidTitle = document.getElementById("uidTitle");
   var uidBox = document.getElementById("uidBox");
-  var uidSub = document.getElementById("uidSub");
-  var uidInput = document.getElementById("uidInput");
-  var uidSetWrap = document.getElementById("uidSetWrap");
 
   function showUid(uid, nick, isMine) {
     uidTitle.textContent = isMine ? "你的专属编号" : (nick + " 的编号");
     uidBox.textContent = uid ? ("#" + uid) : "该用户没有编号（旧消息）";
-    uidSub.style.display = isMine ? "" : "none";
-    uidSetWrap.style.display = isMine ? "" : "none";
-    uidInput.value = "";
     uidModal.hidden = false;
     if (isMine && !uid) {
       ensureUid();
@@ -312,15 +287,6 @@ footer {
   document.addEventListener("keydown", function(e) {
     if (e.key === "Escape" && !uidModal.hidden) closeUidModal();
   });
-  document.getElementById("uidSet").onclick = function() {
-    var v = uidInput.value.trim().toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16);
-    if (!v) { toast("请输入有效编号"); return; }
-    myUid = v;
-    localStorage.setItem("uid", v);
-    uidBox.textContent = "#" + v;
-    uidInput.value = "";
-    toast("编号已设定");
-  };
 
   var online = document.getElementById("online");
   var dot = document.getElementById("dot");
