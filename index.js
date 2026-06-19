@@ -46,11 +46,17 @@ async function tidbQuery(env, sql, args) {
 
   let finalSql = sql;
   if (args && args.length > 0) {
-    args.forEach(arg => {
+    // 第一遍：把每个 ? 占位符换成唯一 token，避免 value 里的 ? 干扰后续替换
+    let i = 0;
+    finalSql = finalSql.replace(/\?/g, function() {
+      return '\x00PH' + (i++) + '\x00';
+    });
+    // 第二遍：把 token 替换为实际值
+    args.forEach((arg, idx) => {
       const val = typeof arg === 'string'
         ? "'" + arg.replace(/['\\]/g, m => '\\' + m) + "'"
         : String(arg);
-      finalSql = finalSql.replace('?', val);
+      finalSql = finalSql.replace('\x00PH' + idx + '\x00', val);
     });
   }
 
