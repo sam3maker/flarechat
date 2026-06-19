@@ -9,6 +9,7 @@
 const OPT = {
   siteName: "flarechat",
   themeURL: "https://raw.githubusercontent.com/sam3maker/flarechat/main/theme/",
+  faviconURL: "",                 // 留空 → 默认 💬 emoji SVG；填 URL → 透传该 favicon
   themeCacheTtl: 600,
   defaultRoom: "lobby",
   maxNickLen: 16,
@@ -17,10 +18,10 @@ const OPT = {
   historyLimit: 200,
   rateMsgPerMin: 10,
   rateImgPerMin: 3,
-  cleanupChance: 0.05,           // 每条消息后 5% 概率触发清理
+  cleanupChance: 0.05,
   imgCacheSec: 86400,
   roomListSize: 50,
-  heartbeatTtl: 60,              // 心跳 KV TTL（秒，KV 最小值 60），客户端 15s 续期一次
+  heartbeatTtl: 60,
   roomNameRe: /^[a-z0-9_-]{1,32}$/,
   allowedImageMime: ["image/jpeg", "image/png", "image/webp", "image/gif"]
 };
@@ -126,13 +127,6 @@ function sanitizeNick(raw) {
   return s.replace(/[<>&"'`\x00-\x1f]/g, '');
 }
 
-function sanitizeIcon(raw) {
-  if (typeof raw !== 'string') return "";
-  // 1-8 字符，去掉 HTML/控制字符
-  const s = raw.trim().slice(0, 8).replace(/[<>&"'`\x00-\x1f]/g, '');
-  return s;
-}
-
 function validRoom(name) {
   return typeof name === 'string' && OPT.roomNameRe.test(name);
 }
@@ -154,14 +148,14 @@ async function rateLimit(env, ip, action, limit) {
 // ────────────────────────────────────────────────────────────
 async function insertMessage(env, m) {
   await tidbQuery(env,
-    `INSERT INTO chat_messages (room, nick, color, type, text, image_id, icon) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null, m.icon || null]
+    `INSERT INTO chat_messages (room, nick, color, type, text, image_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null]
   );
 }
 
 async function getRecent(env, room) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, icon, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT ?`,
     [room, OPT.historyLimit]
   );
@@ -171,7 +165,7 @@ async function getRecent(env, room) {
 
 async function getSince(env, room, sinceId) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, icon, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? AND id > ? ORDER BY id ASC LIMIT 100`,
     [room, sinceId]
   );
@@ -186,7 +180,6 @@ function rowToMsg(row) {
     type: row.type,
     text: row.text || "",
     imageId: row.image_id || "",
-    icon: row.icon || "",
     ts: Number(row.ts) * 1000,
     recalled: row.type === "recalled"
   };
@@ -318,6 +311,34 @@ async function serveTheme(path) {
   });
 }
 
+// favicon：OPT.faviconURL 控制（部署者专属，前端不暴露修改入口）
+async function serveFavicon() {
+  const url = OPT.faviconURL;
+  if (!url || url === "emoji") {
+    // 默认：emoji 💬 SVG
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💬</text></svg>';
+    return new Response(svg, {
+      headers: {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Cache-Control": "public, max-age=86400"
+      }
+    });
+  }
+  try {
+    const resp = await fetch(url, { cf: { cacheTtl: 86400 } });
+    if (!resp.ok) return new Response("favicon fetch failed", { status: 502 });
+    return new Response(resp.body, {
+      status: resp.status,
+      headers: {
+        "Content-Type": resp.headers.get("Content-Type") || "image/x-icon",
+        "Cache-Control": "public, max-age=86400"
+      }
+    });
+  } catch (err) {
+    return new Response("favicon error", { status: 500 });
+  }
+}
+
 // ────────────────────────────────────────────────────────────
 //  路由处理
 // ────────────────────────────────────────────────────────────
@@ -344,17 +365,16 @@ async function handleSend(env, ip, body) {
     if (!validRoom(room)) throw new Error("房间名非法");
     const nick = sanitizeNick(body.nick);
     const color = hashColor(nick + "|" + ip);
-    const icon = sanitizeIcon(body.icon);
 
     let enriched;
     if (body.type === "text") {
       const text = String(body.text || "").slice(0, OPT.maxMessageLen).trim();
       if (!text) throw new Error("消息为空");
-      enriched = { type: "text", room, nick, color, icon, text };
+      enriched = { type: "text", room, nick, color, text };
     } else if (body.type === "image") {
       const imageId = String(body.imageId || "").slice(0, 26);
       if (!/^[A-Za-z0-9]{1,26}$/.test(imageId)) throw new Error("图片 id 非法");
-      enriched = { type: "image", room, nick, color, icon, imageId };
+      enriched = { type: "image", room, nick, color, imageId };
     } else {
       throw new Error("消息类型非法");
     }
@@ -513,6 +533,10 @@ export default {
 
     if (method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS, status: 204 });
+    }
+
+    if (method === "GET" && (path === "/favicon.ico" || path === "/favicon.png")) {
+      return await serveFavicon();
     }
 
     if (method === "GET" && (path === "/" || path === "/index.html")) {

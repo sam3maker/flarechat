@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<link rel="icon" href="/favicon.ico">
 <title>flarechat</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -32,29 +33,20 @@ main {
   display: flex; flex-direction: column; gap: 4px;
 }
 .msg {
-  display: flex; flex-wrap: wrap; align-items: flex-start;
+  display: flex; flex-wrap: wrap; align-items: baseline;
   padding: 2px 0; line-height: 1.6; word-break: break-word;
-  position: relative; gap: 8px;
-}
-.msg .avatar {
-  width: 28px; height: 28px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; color: #fff; flex-shrink: 0;
-  user-select: none; margin-top: 2px;
-  background: #334155;
+  position: relative;
 }
 .msg .nick {
   font-size: 13px; font-weight: 600;
   margin-right: 1em;
   flex-shrink: 0; user-select: none;
-  align-self: center;
 }
 .msg .body {
   flex: 1; min-width: 0;
   font-size: 14px; color: #f1f1f1;
   white-space: pre-wrap;
   line-height: 1.55;
-  align-self: center;
 }
 .msg .body img { max-width: 100%; max-height: 280px; border-radius: 8px; display: block; cursor: pointer; margin-top: 4px; }
 .msg .time {
@@ -164,58 +156,6 @@ footer {
 }
 .modal-close:hover { background: rgba(255,255,255,0.04); }
 
-/* 齿轮按钮 */
-.icon-btn {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; cursor: pointer; color: #cbd5e1;
-  flex-shrink: 0; transition: all 0.15s;
-}
-.icon-btn:hover { background: rgba(99,102,241,0.2); color: #fff; transform: rotate(45deg); }
-
-/* 设置面板 */
-.settings-row {
-  display: flex; flex-direction: column; gap: 6px;
-  margin-bottom: 14px;
-}
-.settings-row label {
-  font-size: 12px; color: #94a3b8; font-weight: 500;
-}
-.settings-row input {
-  padding: 8px 10px; min-width: 0;
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-  color: #fff; border-radius: 8px; outline: none; font-size: 13px;
-  font-family: inherit;
-}
-.settings-row input:focus { border-color: #6366f1; }
-.settings-actions {
-  display: flex; gap: 8px; margin-top: 18px;
-}
-.settings-actions button {
-  flex: 1; padding: 9px;
-  border-radius: 8px; cursor: pointer; font-size: 13px;
-  border: 1px solid rgba(255,255,255,0.12);
-}
-.settings-actions .secondary {
-  background: transparent; color: #94a3b8;
-}
-.settings-actions .secondary:hover { background: rgba(255,255,255,0.04); }
-.settings-actions .primary {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border-color: transparent; color: #fff; font-weight: 500;
-}
-.settings-actions .primary:active { transform: scale(0.98); }
-.icon-preview {
-  display: flex; align-items: center; gap: 10px; padding: 10px;
-  background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 14px;
-}
-.icon-preview .avatar {
-  width: 36px; height: 36px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; color: #fff; background: #334155;
-}
-.icon-preview .meta { font-size: 12px; color: #94a3b8; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -224,13 +164,12 @@ footer {
   <span class="dot" id="dot"></span>
   <span class="room-name">#lobby</span>
   <span class="online">在线 <b id="online">0</b></span>
-  <button class="icon-btn" id="settingsBtn" title="设置">⚙</button>
 </header>
 
 <main id="messages"></main>
 
 <footer>
-  <div class="avatar" id="myAvatar" title="点击修改设置"></div>
+  <input id="nickInput" placeholder="昵称" maxlength="16" title="点击修改昵称">
   <textarea id="text" placeholder="说点什么...  (Enter 发送 / Shift+Enter 换行)" maxlength="500" rows="1"></textarea>
   <label class="img-btn" title="发送图片">＋<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" id="file" hidden></label>
   <button id="send">发送</button>
@@ -245,38 +184,6 @@ footer {
     </div>
     <div class="room-hint">房间不会公开展示，把房间名直接分享给朋友即可加入。</div>
     <button class="modal-close">关闭</button>
-  </div>
-</div>
-
-<div id="settingsModal" class="modal-mask" hidden>
-  <div class="modal">
-    <h3>设置</h3>
-
-    <div class="icon-preview">
-      <div class="avatar" id="previewAvatar"></div>
-      <div class="meta">
-        <div id="previewNick" style="color:#fff;font-weight:600;font-size:14px"></div>
-        <div>这是你在聊天中的样子</div>
-      </div>
-    </div>
-
-    <div class="settings-row">
-      <label>昵称</label>
-      <input id="setNick" maxlength="16" autocomplete="off">
-    </div>
-    <div class="settings-row">
-      <label>头像 icon（emoji 或 1-2 字，留空则用昵称首字）</label>
-      <input id="setIcon" maxlength="8" autocomplete="off" placeholder="如 🦊 或 A">
-    </div>
-    <div class="settings-row">
-      <label>网页 favicon URL（留空用默认）</label>
-      <input id="setFavicon" type="url" autocomplete="off" placeholder="https://example.com/favicon.ico">
-    </div>
-
-    <div class="settings-actions">
-      <button class="secondary" id="settingsCancel">取消</button>
-      <button class="primary" id="settingsSave">保存</button>
-    </div>
   </div>
 </div>
 
@@ -306,59 +213,17 @@ footer {
     return ADJ[Math.floor(Math.random()*ADJ.length)] + NOUN[Math.floor(Math.random()*NOUN.length)] + Math.floor(Math.random()*90+10);
   }
 
-  var nickInput = { value: localStorage.getItem("nick") || randNick() };
+  var nickInput = document.getElementById("nickInput");
+  nickInput.value = localStorage.getItem("nick") || randNick();
   function getNick() {
-    var v = (nickInput.value || "").trim().slice(0, 16);
+    var v = nickInput.value.trim().slice(0, 16);
     if (!v) { v = randNick(); nickInput.value = v; }
     return v;
   }
-  function getIcon() {
-    var v = (localStorage.getItem("icon") || "").trim();
-    if (!v) return "";  // 留空 → 用 nick 首字
-    return v;
-  }
-  function avatarContent(nick, icon) {
-    if (icon) return icon;
-    return (nick || "?").slice(0, 1);
-  }
-  function avatarColor(nick) {
-    // 简单 hash → HSL，与服务端 hashColor 视觉一致
-    var h = 0;
-    for (var i = 0; i < nick.length; i++) h = (h * 31 + nick.charCodeAt(i)) >>> 0;
-    var hue = h % 360;
-    return "hsl(" + hue + ", 75%, 65%)";
-  }
-
-  // 应用 favicon（动态修改 <link rel="icon">）
-  function applyFavicon(url) {
-    var links = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
-    links.forEach(function(l){ l.remove(); });
-    var link = document.createElement("link");
-    link.rel = "icon";
-    if (url) {
-      link.href = url;
-    } else {
-      // 默认：emoji SVG
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💬</text></svg>';
-      link.href = "data:image/svg+xml," + encodeURIComponent(svg);
-    }
-    document.head.appendChild(link);
-  }
-
-  // 应用本地头像（footer 左侧显示）
-  function applyMyAvatar() {
-    var nick = getNick();
-    var icon = getIcon();
-    var av = document.getElementById("myAvatar");
-    if (av) {
-      av.textContent = avatarContent(nick, icon);
-      av.style.background = avatarColor(nick);
-    }
-  }
-
-  // 启动时应用 favicon + 头像
-  applyFavicon(localStorage.getItem("favicon") || "");
-  applyMyAvatar();
+  nickInput.addEventListener("change", function() {
+    localStorage.setItem("nick", nickInput.value.trim().slice(0, 16));
+    toast("昵称已更新");
+  });
 
   var online = document.getElementById("online");
   var dot = document.getElementById("dot");
@@ -399,60 +264,6 @@ footer {
   roomInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter") gotoRoom(roomInput.value);
   });
-
-  // ── 设置面板 ──
-  var settingsModal = document.getElementById("settingsModal");
-  var settingsBtn = document.getElementById("settingsBtn");
-  var setNickInput = document.getElementById("setNick");
-  var setIconInput = document.getElementById("setIcon");
-  var setFaviconInput = document.getElementById("setFavicon");
-  var previewAvatar = document.getElementById("previewAvatar");
-  var previewNick = document.getElementById("previewNick");
-
-  function updateSettingsPreview() {
-    var n = setNickInput.value.trim() || randNick();
-    var ic = setIconInput.value.trim();
-    previewAvatar.textContent = avatarContent(n, ic);
-    previewAvatar.style.background = avatarColor(n);
-    previewNick.textContent = n;
-  }
-  setNickInput.addEventListener("input", updateSettingsPreview);
-  setIconInput.addEventListener("input", updateSettingsPreview);
-
-  function openSettings() {
-    setNickInput.value = getNick();
-    setIconInput.value = getIcon();
-    setFaviconInput.value = localStorage.getItem("favicon") || "";
-    updateSettingsPreview();
-    settingsModal.hidden = false;
-  }
-  function closeSettings() { settingsModal.hidden = true; }
-  settingsBtn.onclick = openSettings;
-  document.getElementById("settingsCancel").onclick = closeSettings;
-  document.getElementById("myAvatar").onclick = openSettings;
-  settingsModal.addEventListener("click", function(e) {
-    if (e.target === settingsModal) closeSettings();
-  });
-  document.addEventListener("keydown", function(e) {
-    if (e.key === "Escape" && !settingsModal.hidden) closeSettings();
-  });
-
-  document.getElementById("settingsSave").onclick = function() {
-    var newNick = setNickInput.value.trim().slice(0, 16);
-    if (!newNick) newNick = randNick();
-    var newIcon = setIconInput.value.trim().slice(0, 8);
-    var newFavicon = setFaviconInput.value.trim();
-
-    nickInput.value = newNick;
-    localStorage.setItem("nick", newNick);
-    localStorage.setItem("icon", newIcon);
-    localStorage.setItem("favicon", newFavicon);
-
-    applyFavicon(newFavicon);
-    applyMyAvatar();
-    closeSettings();
-    toast("设置已保存");
-  };
 
   // ── 历史加载（一次性，初次进入）──
   function loadHistory() {
@@ -537,13 +348,6 @@ footer {
     var div = document.createElement("div");
     div.className = "msg" + (m.recalled ? " recalled" : "");
     div.dataset.id = m.id;
-
-    // 头像
-    var avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.textContent = avatarContent(m.nick, m.icon);
-    avatar.style.background = m.color || avatarColor(m.nick);
-    div.appendChild(avatar);
 
     var nickEl = document.createElement("span");
     nickEl.className = "nick";
@@ -636,7 +440,7 @@ footer {
     fetch("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room: room, type: "text", text: v, nick: getNick(), icon: getIcon() })
+      body: JSON.stringify({ room: room, type: "text", text: v, nick: getNick() })
     })
       .then(function(r){ return r.json(); })
       .then(function(data) {
@@ -674,7 +478,7 @@ footer {
         var sendResp = await fetch("/api/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick(), icon: getIcon() })
+          body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick() })
         });
         var sendData = await sendResp.json();
         if (sendData.ok && sendData.msg && sendData.msg.id) {
