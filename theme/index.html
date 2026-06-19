@@ -156,6 +156,31 @@ footer {
 }
 .modal-close:hover { background: rgba(255,255,255,0.04); }
 
+/* 用户编号弹窗 */
+.uid-box {
+  font-size: 28px; font-weight: 700; color: #fff;
+  text-align: center; padding: 20px; margin-bottom: 14px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.15));
+  border: 1px dashed rgba(99,102,241,0.4); border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 2px; user-select: all;
+}
+.uid-actions {
+  display: flex; gap: 8px; margin: 12px 0;
+}
+.uid-actions input {
+  flex: 1; padding: 8px 10px; min-width: 0;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: #fff; border-radius: 8px; outline: none; font-size: 13px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.uid-actions input:focus { border-color: #6366f1; }
+.uid-actions .primary {
+  padding: 8px 14px; background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px;
+}
+.uid-actions .primary:active { transform: scale(0.96); }
+
 </style>
 </head>
 <body>
@@ -187,6 +212,24 @@ footer {
   </div>
 </div>
 
+<div id="uidModal" class="modal-mask" hidden>
+  <div class="modal">
+    <h3>你的专属编号</h3>
+    <div class="uid-box" id="uidBox">读取中...</div>
+    <div class="room-hint">
+      这是系统分配给你的<strong>永久唯一编号</strong>，刷新或换设备后只要编号相同，
+      就视为同一个人，可以互相撤回消息。
+      <br><br>
+      请妥善保存：换浏览器/设备时，手动输入相同编号即可恢复身份。
+    </div>
+    <div class="uid-actions">
+      <input id="uidInput" placeholder="换设备时填入旧编号恢复身份" maxlength="16" autocomplete="off">
+      <button id="uidSet" class="primary">设定</button>
+    </div>
+    <button class="modal-close">关闭</button>
+  </div>
+</div>
+
 <script>
 (function() {
   'use strict';
@@ -206,6 +249,23 @@ footer {
     localStorage.setItem("cid", clientId);
   }
 
+  // 永久用户编号（uid）：本地存，没有就找服务端要
+  var myUid = localStorage.getItem("uid") || "";
+  function ensureUid() {
+    if (myUid) return;
+    fetch("/api/uid", { method: "POST" })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (data.ok && data.uid) {
+          myUid = data.uid;
+          localStorage.setItem("uid", myUid);
+        }
+      })
+      .catch(function(){});
+  }
+  ensureUid();
+  function getUid() { return myUid || ""; }
+
   // 默认昵称
   var ADJ = ["安静","快乐","勇敢","害羞","聪明","调皮","神秘","闪电","柔软","明亮","遥远","蓝色","金色","森林","海洋","银河","月光","火焰","微风","星辰"];
   var NOUN = ["的猫","的狐","的熊","的兔","的鲸","的鹰","的鹿","的狼","的鸭","的鱼","的狮","的羊","的象","的虎","的雀","的蜂","的海豚","的水母","的考拉"];
@@ -224,6 +284,39 @@ footer {
     localStorage.setItem("nick", nickInput.value.trim().slice(0, 16));
     toast("昵称已更新");
   });
+
+  // ── 点击昵称弹窗显示编号 ──
+  var uidModal = document.getElementById("uidModal");
+  var uidBox = document.getElementById("uidBox");
+  var uidInput = document.getElementById("uidInput");
+  nickInput.style.cursor = "pointer";
+  nickInput.addEventListener("focus", function(){ nickInput.blur(); openUidModal(); });
+  nickInput.addEventListener("click", openUidModal);
+  function openUidModal() {
+    uidBox.textContent = myUid ? ("#" + myUid) : "正在生成...";
+    uidInput.value = "";
+    if (!myUid) ensureUid();
+    uidModal.hidden = false;
+    // 等 uid 生成完再刷新显示
+    setTimeout(function(){
+      if (myUid) uidBox.textContent = "#" + myUid;
+    }, 1500);
+  }
+  function closeUidModal() { uidModal.hidden = true; }
+  uidModal.addEventListener("click", function(e){ if (e.target === uidModal) closeUidModal(); });
+  uidModal.querySelector(".modal-close").addEventListener("click", closeUidModal);
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape" && !uidModal.hidden) closeUidModal();
+  });
+  document.getElementById("uidSet").onclick = function() {
+    var v = uidInput.value.trim().toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16);
+    if (!v) { toast("请输入有效编号"); return; }
+    myUid = v;
+    localStorage.setItem("uid", v);
+    uidBox.textContent = "#" + v;
+    uidInput.value = "";
+    toast("编号已设定");
+  };
 
   var online = document.getElementById("online");
   var dot = document.getElementById("dot");
@@ -344,7 +437,8 @@ footer {
     if (!m || !m.id || renderedIds[m.id]) return;
     renderedIds[m.id] = true;
 
-    var mine = m.nick === getNick();
+    // 用 uid 判断"自己的消息"（uid 优先，回退到 nick）
+    var mine = (m.uid && m.uid === myUid) || (!m.uid && m.nick === getNick());
     var div = document.createElement("div");
     div.className = "msg" + (m.recalled ? " recalled" : "");
     div.dataset.id = m.id;
@@ -396,7 +490,7 @@ footer {
     fetch("/api/recall", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: id, nick: getNick() })
+      body: JSON.stringify({ id: id, uid: getUid() })
     })
       .then(function(r){ return r.json(); })
       .then(function(data) {
@@ -440,7 +534,7 @@ footer {
     fetch("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room: room, type: "text", text: v, nick: getNick() })
+      body: JSON.stringify({ room: room, type: "text", text: v, nick: getNick(), uid: getUid() })
     })
       .then(function(r){ return r.json(); })
       .then(function(data) {
@@ -478,7 +572,7 @@ footer {
         var sendResp = await fetch("/api/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick() })
+          body: JSON.stringify({ room: room, type: "image", imageId: data.id, nick: getNick(), uid: getUid() })
         });
         var sendData = await sendResp.json();
         if (sendData.ok && sendData.msg && sendData.msg.id) {

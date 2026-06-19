@@ -97,6 +97,34 @@ function genId() {
   return (ts + rand).slice(0, 26);
 }
 
+const UID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz";
+function randomBase36(len) {
+  let s = "";
+  for (let i = 0; i < len; i++) {
+    s += UID_CHARS[Math.floor(Math.random() * 36)];
+  }
+  return s;
+}
+
+// 生成全局唯一用户编号（永久有效，KV 持久化标记）
+async function generateUid(env) {
+  for (let i = 0; i < 5; i++) {
+    const uid = randomBase36(8);
+    const key = "UID_" + uid;
+    const exist = await env.ROOM_INDEX.get(key);
+    if (!exist) {
+      await env.ROOM_INDEX.put(key, String(Date.now()));
+      return uid;
+    }
+  }
+  return randomBase36(12);  // 极端 fallback
+}
+
+function sanitizeUid(raw) {
+  if (typeof raw !== 'string') return "";
+  return raw.replace(/[^a-z0-9]/g, "").slice(0, 16);
+}
+
 function hashColor(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -148,14 +176,14 @@ async function rateLimit(env, ip, action, limit) {
 // ────────────────────────────────────────────────────────────
 async function insertMessage(env, m) {
   await tidbQuery(env,
-    `INSERT INTO chat_messages (room, nick, color, type, text, image_id) VALUES (?, ?, ?, ?, ?, ?)`,
-    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null]
+    `INSERT INTO chat_messages (room, nick, color, type, text, image_id, uid) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [m.room, m.nick, m.color, m.type, m.text || null, m.imageId || null, m.uid || null]
   );
 }
 
 async function getRecent(env, room) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, uid, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? ORDER BY id DESC LIMIT ?`,
     [room, OPT.historyLimit]
   );
@@ -165,7 +193,7 @@ async function getRecent(env, room) {
 
 async function getSince(env, room, sinceId) {
   const r = await tidbQuery(env,
-    `SELECT id, nick, color, type, text, image_id, UNIX_TIMESTAMP(ts) AS ts
+    `SELECT id, nick, color, type, text, image_id, uid, UNIX_TIMESTAMP(ts) AS ts
      FROM chat_messages WHERE room=? AND id > ? ORDER BY id ASC LIMIT 100`,
     [room, sinceId]
   );
@@ -180,6 +208,7 @@ function rowToMsg(row) {
     type: row.type,
     text: row.text || "",
     imageId: row.image_id || "",
+    uid: row.uid || "",
     ts: Number(row.ts) * 1000,
     recalled: row.type === "recalled"
   };
@@ -365,33 +394,35 @@ async function handleSend(env, ip, body) {
     if (!validRoom(room)) throw new Error("房间名非法");
     const nick = sanitizeNick(body.nick);
     const color = hashColor(nick + "|" + ip);
+    const uid = sanitizeUid(body.uid);
 
     let enriched;
     if (body.type === "text") {
       const text = String(body.text || "").slice(0, OPT.maxMessageLen).trim();
       if (!text) throw new Error("消息为空");
-      enriched = { type: "text", room, nick, color, text };
+      enriched = { type: "text", room, nick, color, uid, text };
     } else if (body.type === "image") {
       const imageId = String(body.imageId || "").slice(0, 26);
       if (!/^[A-Za-z0-9]{1,26}$/.test(imageId)) throw new Error("图片 id 非法");
-      enriched = { type: "image", room, nick, color, imageId };
+      enriched = { type: "image", room, nick, color, uid, imageId };
     } else {
       throw new Error("消息类型非法");
     }
 
     await insertMessage(env, enriched);
     await touchRoom(env, room);
-    await heartbeat(env, room, ip);   // 发消息也续期在线状态
+    await heartbeat(env, room, ip);
 
     if (Math.random() < OPT.cleanupChance) {
       try { await cleanupRoom(env, room); } catch (e) {}
     }
 
-    // 取回刚插入的 id/ts
+    // 用 uid + 时间窗口精准取回刚插入的 id（不再依赖 nick）
     const r = await tidbQuery(env,
       `SELECT id, UNIX_TIMESTAMP(ts) AS ts FROM chat_messages
-       WHERE room=? AND nick=? AND type=? ORDER BY id DESC LIMIT 1`,
-      [room, nick, enriched.type]
+       WHERE room=? AND uid=? AND type=?
+       ORDER BY id DESC LIMIT 1`,
+      [room, uid, enriched.type]
     );
     if (r.rows && r.rows.length > 0) {
       enriched.id = String(r.rows[0].id);
@@ -415,22 +446,24 @@ async function handleHeartbeat(env, url, body) {
   }
 }
 
-// 撤回消息（软删除：仅本人 + 5 分钟内）
+// 撤回消息（软删除：同 uid + 5 分钟内）
 async function handleRecall(env, ip, body) {
   try {
     const id = String(body.id || "").replace(/[^0-9]/g, "");
     if (!id) throw new Error("缺少消息 id");
-    const nick = sanitizeNick(body.nick);
+    const uid = sanitizeUid(body.uid);
+    if (!uid) throw new Error("缺少用户编号");
 
     const r = await tidbQuery(env,
-      `SELECT nick, type, image_id, UNIX_TIMESTAMP(ts) AS ts
+      `SELECT uid, type, image_id, UNIX_TIMESTAMP(ts) AS ts
        FROM chat_messages WHERE id=?`,
       [id]
     );
     if (!r.rows || r.rows.length === 0) throw new Error("消息不存在");
     const row = r.rows[0];
     if (row.type === "recalled") throw new Error("消息已被撤回");
-    if (row.nick !== nick) throw new Error("只能撤回自己的消息");
+    if (!row.uid) throw new Error("旧消息无法撤回（缺少编号）");
+    if (row.uid !== uid) throw new Error("只能撤回同编号的消息");
     const ageSec = Math.floor(Date.now() / 1000) - Number(row.ts);
     if (ageSec > 300) throw new Error("超过 5 分钟，不能撤回");
 
@@ -558,6 +591,14 @@ export default {
       return await handleOnline(env, url);
     }
 
+    if (method === "POST" && path === "/api/uid") {
+      try {
+        const uid = await generateUid(env);
+        return jsonBody({ ok: 1, uid });
+      } catch (err) {
+        return jsonBody({ ok: 0, msg: err.message }, 500);
+      }
+    }
     if (method === "POST" && path === "/api/send") {
       let body;
       try { body = await request.json(); } catch { body = {}; }
